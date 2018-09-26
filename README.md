@@ -1,7 +1,7 @@
 # submit.py
 Generalized submit command for slurm / moabs
 
-The **submit.py** command submits jobs to a *slurm* or *PBS*-based cluster computer. It is a 
+The **submit.py** command submits jobs to a *slurm* or *PBS*-based schedule in a cluster environment. It is a 
 user-friendly replacement for **sbatch** or **qsub**, and offers several useful features 
 compared to the original commands. Its basic syntax is:
 
