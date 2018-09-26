@@ -43,9 +43,9 @@ contains the @ character, it will be replaced with the id of the submitted job.
 For example, let’s imagine we want to process three different files (file1, file2, and file3) with the `test.qsub` 
 script, and we want to pause until all three jobs are complete. This is accomplished with the following code:
 
-```
+```bash
 $ for f in file1 file2 file3; do
-  submit -done test.@.done test.qsub $f
+  submit.p -done test.@.done test.qsub $f
 done
 ```
 
@@ -69,8 +69,8 @@ fact that submit prints the job id of the submitted job when done. So, to schedu
 job1.qsub, you can do:
 
 ```bash
-$ JOB1=$(submit job1.qsub)
-$ submit -after $JOB1 job2.qsub
+$ JOB1=$(submit.py job1.qsub)
+$ submit.py -after $JOB1 job2.qsub
 ```
 
 ## Configuration file
@@ -92,13 +92,13 @@ you can put the following in your `.sbatchrc` file:
 You can use the `-o` option to pass additional options to the underlying submission program (sbatch or qsub). For example, to specify time and memory limits for the job you are submitting, you can use:
 
 ```bash
-$ submit -o --mem=10G,--time=20:00:00 test.qsub
+$ submit.py -o --mem=10G,--time=20:00:00 test.qsub
 ```
 
 - or -
 
 ```bash
-$ submit -o --mem=10G -o --time=20:00:00 test.qsub
+$ submit.py -o --mem=10G -o --time=20:00:00 test.qsub
 ```
 
 Note that you can supply multiple directives after `-o`, in which case they should be separated by commas with no 
