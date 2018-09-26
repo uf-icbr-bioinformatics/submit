@@ -87,6 +87,30 @@ you can put the following in your `.sbatchrc` file:
 --mail-type=FAIL
 ```
 
+## Scripts library
+
+If the qsub script you are submitting is not found in the current directory, it will be looked up in a
+*script library.* The location of the script library can be specified with the `-lib` option or by 
+setting the `SUBMIT_LIB` environment variable. This allows you to create a library of frequently-used
+submission scripts that can be invoked simply by name, instead of having to specify their full path. 
+You can use the `-ls` option to list all the scripts in your library, in alphabetical order.
+
+Once you know the name of the script you want to call, you can use the `-v` option to print its usage 
+message. A single `-v` will print only a description of the script, `-vv` will print its required and 
+optional arguments, and `-vvv` will print the whole script. This requires the submission script to contain
+a header formatted the following way:
+
+```
+#!/bin/bash
+
+## One-line description
+## arg1 = description of first argument
+## arg2 = description of second argument
+## ...
+
+(rest of script)
+```
+
 ## Miscellaneous options
 
 You can use the `-o` option to pass additional options to the underlying submission program (sbatch or qsub). For example, to specify time and memory limits for the job you are submitting, you can use:
