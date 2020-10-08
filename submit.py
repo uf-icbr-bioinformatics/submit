@@ -14,7 +14,7 @@ from datetime import datetime
 class Submit():
     mode     = "slurm"         # Or "pbs"
     dry      = False
-    debug    = False
+    debug    = 0
     decorate = True
     doneFile = None
     array    = None
@@ -39,14 +39,14 @@ class Submit():
         for a in ['mode', 'dry', 'decorate', 'doneFile', 'array', 'comment', 'queue', 'coptions', 'foptions', 'confFile', 'scriptLibrary', 'logFile', 'afterArgs', 'trueArgs']:
             sys.stderr.write("{} = {}\n".format(a, getattr(self, a)))
 
-    def writeLogEntry(self, script):
+    def writeLogEntry(self, script, jobid):
         """Write a log entry to the logFile to record that `script' was called. Uses locking."""
         now = datetime.now()
         try:
             with open(self.logFile, "a") as f:
                 fcntl.flock(f,fcntl.LOCK_EX)
                 try:
-                    f.write(now.isoformat('\t') + '\t' + getpass.getuser() + '\t' + script + '\n')
+                    f.write(now.isoformat('\t') + '\t' + jobid + "\t" + getpass.getuser() + '\t' + script + '\n')
                 finally:
                     fcntl.flock(f,fcntl.LOCK_UN)
         except:
@@ -67,6 +67,7 @@ class Submit():
         sys.stdout.write("""{progname} - submit jobs to a cluster scheduler.
 
 Usage: submit [submit-options] scriptName [arguments...]
+       submit -w jobids...
        submit -ls
        submit -v[v[v]] scriptName
 
@@ -127,13 +128,21 @@ Submit options (should be BEFORE script name):
 
 Other options:
 
- -ls           | List all the available *.qsub scripts in the default library directory. 
-               | The location of the library is printed before the list of scripts. If 
-               | this argument is specified, all other arguments are ignored.
+ -w jobids...  | Extract log file entry for each of the specified job ids.
+
+ -ls [patt...] | List all the available *.qsub scripts in the default library directory. 
+               | If one or more `patt' arguments are specified, only lists scripts
+               | whose name contains one of them; otherwise, all scripts are listed.
+               | For example, `submit -ls bowtie' will list all scripts with `bowtie' in
+               | their name.  
+               | The location of the library is printed before the list of scripts. 
 
  -v[v[v]] name | Print a one-line description of what script `name' does; "-vv" also 
                | prints a description of the command-line arguments accepted by the 
                | script, and "-vvv" prints out the entire script.
+
+ -d[d]         | Debug mode: print command line being executed. "-dd" also displays
+               | parameter values and does not delete decorated script.
 
 Return value:
 
@@ -155,10 +164,18 @@ Configuration:
     def parseArgs(self, args):
         after = False
         next = ""
-        valuedArgs = ['-v', '-vv', '-vvv', '-conf', '-after', '-done', '-n', '-p', '-q', '-t', '-o', '-lib', '-log', '-debug', '-mode']
+        valuedArgs = ['-v', '-vv', '-vvv', '-conf', '-after', '-done', '-n', '-p', '-q', '-t', '-o', '-lib', '-log', '-mode']
 
         if args == []:
             self.usage()
+            return False
+
+        if args[0] == '-ls':
+            self.listScripts(args[1:])
+            return False
+
+        if args[0] == "-w":
+            self.lookupJobs(args[1:])
             return False
 
         for a in args:
@@ -169,11 +186,10 @@ Configuration:
                     self.decorate = False
                 elif a == "-x":
                     self.dry = True
-                elif a == "-debug":
-                    self.debug = True
-                elif a == "-ls":
-                    self.listScripts()
-                    return False
+                elif a == "-d":
+                    self.debug = 1
+                elif a == "-dd":
+                    self.debug = 2
                 elif a in ["-h", "--help"]:
                     self.usage()
                     return False
@@ -259,12 +275,14 @@ Configuration:
                         out.write("\necho Commandline: " + " ".join(self.trueArgs) + "\n")
                         out.write("echo Started: `date`\n\n")
                 out.write(row)
-            out.write("echo Terminated: `date`\n")
-        if self.doneFile:
-            p = self.doneFile.find("@")
-            if p >= 0:
-                self.doneFile = self.doneFile[0:p] + DEFAULTS[self.mode]['jobid'] + self.doneFile[p+1:]
-            out.write("touch " + self.doneFile + "\n");
+            out.write("_RETCODE=$?\n")
+            if self.doneFile:
+                p = self.doneFile.find("@")
+                if p >= 0:
+                    self.doneFile = self.doneFile[0:p] + DEFAULTS[self.mode]['jobid'] + self.doneFile[p+1:]
+                #out.write("touch " + self.doneFile + "\n")
+                out.write("echo $_RETCODE > {}\n".format(self.doneFile))
+            out.write("echo Terminated: `date`\nexit $_RETCODE\n")
 
     def resolveScriptName(self, scriptName):
         if os.path.isfile(scriptName):
@@ -277,11 +295,13 @@ Configuration:
 
     def makeCmdline(self):
         origName = self.trueArgs[0]
+        filename = os.path.split(origName)[1]
+        # print (name, origName, filename)
         cmdline = 'sbatch --parsable -D "`pwd`" -J ' + origName
         if self.array:
             cmdline += " -o {}.o%A_%a -e {}.e%A_%a -a {}".format(name, name, self.array)
         else:
-            cmdline += " -o {}.IN.o%j -e {}.IN.e%j".format(origName, origName)
+            cmdline += " -o {}.IN.o%j -e {}.IN.e%j".format(filename, filename)
         if self.comment:
             cmdline += ' --comment "{}"'.format(self.comment)
         if self.afterArgs:
@@ -322,37 +342,53 @@ Configuration:
             if not self.dry:
                 jobid = self.submitScript(cmdline, origScript)
                 sys.stdout.write(jobid + "\n")
-            self.writeLogEntry(origScript)
+            self.writeLogEntry(origScript, jobid)
 
-            return
-            if self.decorate:
-                self.decorateScript(origScript, decScript)
-                toRun = decScript
-            else:
-                toRun = origScript
-            if not self.dry:
-                #os.system(cmdline)
-                jobid = subprocess.check_output(cmdline, shell=True).rstrip("\n")
-                if self.useDB:
-                    if len(self.trueArgs) > 1:
-                        arg1 = self.trueArgs[1]
-                    else:
-                        arg1 = ""
-                    self.doCollect(jobid, toRun, arg1)
-
-            if self.decorate and not self.debug:
-                os.remove(decScript)
+    # def main(self):
+    #     (origScript, decScript) = self.resolveScriptName(self.trueArgs[0])
+    #     if origScript:
+    #         if self.decorate:
+    #             self.decorateScript(origScript, decScript)
+    #             toRun = decScript
+    #         else:
+    #             toRun = origScript
+    #         self.readOptions()
+    #         cmdline = self.makeCmdline(toRun)
+    #         if self.debug > 0:
+    #             sys.stderr.write("Executing: " + cmdline + "\n")
+    #         if not self.dry:
+    #             #os.system(cmdline)
+    #             jobid = subprocess.check_output(cmdline, shell=True).rstrip("\n")
+    #             if self.useDB:
+    #                 if len(self.trueArgs) > 1:
+    #                     arg1 = self.trueArgs[1]
+    #                 else:
+    #                     arg1 = ""
+    #                 self.doCollect(jobid, toRun, arg1)
+    #             sys.stdout.write(jobid + "\n")
+    #             self.writeLogEntry(toRun, jobid)
+    #         if self.decorate and self.debug < 2:
+    #             os.remove(decScript)
 
     ### Additional commands
 
-    def listScripts(self):
+    def listScripts(self, patterns=[]):
         files = glob.glob("{}/*.qsub".format(self.scriptLibrary))
         files = [ os.path.split(f)[1] for f in files ]
         files.sort()
         sys.stdout.write("Scripts in {}:\n".format(self.scriptLibrary))
         for f in files:
-            sys.stdout.write("  " + f + "\n")
+            if self.matches(f, patterns):
+                sys.stdout.write("  " + f + "\n")
         sys.stdout.write("\n")
+
+    def matches(self, name, patterns):
+        if not patterns:
+            return True
+        for p in patterns:
+            if p in name:
+                return True
+        return False
 
     def readScriptInfo(self, filename):
         desc = ""
@@ -387,6 +423,9 @@ Configuration:
                 sys.stdout.write("Arguments:\n")
                 for a in args:
                     sys.stdout.write(" " + a)
+
+    def lookupJobs(self, jobids):
+        subprocess.call("for j in {}; do grep -w $j {}; done".format(" ".join(jobids), self.logFile), shell=True)
 
 ### PBS support
 
@@ -453,13 +492,13 @@ if __name__ == "__main__":
         subclass = DEFAULTS[mode]['class']
         S = subclass(mode)
         if S.parseArgs(arglist):
-            if S.debug:
+            if S.debug > 1:
                 S.dump()
                 S.main()
             else:
                 try:
                     S.main()
                 except Exception as e:
-                    sys.stderr.write("Error: {}\n".format(e))
+                    sys.stderr.write("Error: {}".format(e))
     else:
         sys.stderr.write("Error: mode should be one of {}.\n".format(", ".join(DEFAULTS.keys())))
