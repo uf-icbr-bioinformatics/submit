@@ -8,8 +8,7 @@ import sys
 import glob
 import fcntl
 import getpass
-import subprocess
-from tempfile import mkstemp
+import subprocess as sp
 from datetime import datetime
 
 class Submit():
@@ -246,42 +245,37 @@ Configuration:
 
         return names
 
-    def decorateScript(self, infile, outfile):
+    def decorateScript(self, infile, out):
         dirtag = DEFAULTS[self.mode]['directive']
         inHeader = True
-        with open(outfile, "w") as out:
-            with open(infile, "r") as inf:
-                for row in inf:
-                    if inHeader:
-                        srow = row.strip()
-                        if len(srow) == 0 or srow.startswith("#!") or srow.startswith(dirtag):
-                            pass
-                        else:
-                            inHeader = False
-                            out.write("\necho Commandline: " + " ".join(self.trueArgs) + "\n")
-                            out.write("echo Started: `date`\n\n")
-                    out.write(row)
-                out.write("echo Terminated: `date`\n")
-            if self.doneFile:
-                p = self.doneFile.find("@")
-                if p >= 0:
-                    self.doneFile = self.doneFile[0:p] + DEFAULTS[self.mode]['jobid'] + self.doneFile[p+1:]
-                out.write("touch " + self.doneFile + "\n");
+        with open(infile, "r") as inf:
+            for row in inf:
+                if inHeader:
+                    srow = row.strip()
+                    if len(srow) == 0 or srow.startswith("#!") or srow.startswith(dirtag):
+                        pass
+                    else:
+                        inHeader = False
+                        out.write("\necho Commandline: " + " ".join(self.trueArgs) + "\n")
+                        out.write("echo Started: `date`\n\n")
+                out.write(row)
+            out.write("echo Terminated: `date`\n")
+        if self.doneFile:
+            p = self.doneFile.find("@")
+            if p >= 0:
+                self.doneFile = self.doneFile[0:p] + DEFAULTS[self.mode]['jobid'] + self.doneFile[p+1:]
+            out.write("touch " + self.doneFile + "\n");
 
     def resolveScriptName(self, scriptName):
-        if not os.path.isfile(scriptName):
-            scriptName = self.scriptLibrary + "/" + scriptName
-            if not os.path.isfile(scriptName):
-                sys.stderr.write("Error: script `{}' not found either in current directory or in script library!\n(Script library: {})\n".format(scriptName, self.scriptLibrary))
-                return (False, False)
-        if self.trueArgs:
-            #decName = self.trueArgs[0] + ".IN"
-            decName = mkstemp(prefix=self.trueArgs[0] + "_", dir=".")[1]
-        else:
-            decName = False
-        return (scriptName, decName)
+        if os.path.isfile(scriptName):
+            return scriptName
+        scriptName = self.scriptLibrary + "/" + scriptName
+        if os.path.isfile(scriptName):
+            return scriptName
+        sys.stderr.write("Error: script `{}' not found either in current directory or in script library!\n(Script library: {})\n".format(scriptName, self.scriptLibrary))
+        return False
 
-    def makeCmdline(self, name):
+    def makeCmdline(self):
         origName = self.trueArgs[0]
         cmdline = 'sbatch --parsable -D "`pwd`" -J ' + origName
         if self.array:
@@ -299,7 +293,7 @@ Configuration:
             cmdline += " " + self.foptions
         if self.coptions:
             cmdline += " " + " ".join(self.coptions)
-        return cmdline + " {} {}".format(name, " ".join(self.trueArgs[1:]))
+        return cmdline + " /dev/stdin " + " ".join(self.trueArgs[1:])
 
     def doCollect(self, jobid, name, arg1):
         cmdline = "scollect.py submit -db {} {} {} {}".format(self.dbFile, jobid, name, arg1)
@@ -308,17 +302,34 @@ Configuration:
         except:
             pass
 
+    def submitScript(self, cmdline, script):
+        proc = sp.Popen(cmdline, shell="True", stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE)
+        if self.decorate:
+            self.decorateScript(script, proc.stdin)
+        else:
+            with open(script, "r") as f:
+                proc.stdin.write(f.read())
+        proc.stdin.close()
+        result = proc.stdout.readline().rstrip("\r\n")
+        return result
+
     def main(self):
-        (origScript, decScript) = self.resolveScriptName(self.trueArgs[0])
+        origScript = self.resolveScriptName(self.trueArgs[0])
         if origScript:
+            self.readOptions()
+            cmdline = self.makeCmdline()
+            sys.stderr.write("Executing: " + cmdline + "\n")
+            if not self.dry:
+                jobid = self.submitScript(cmdline, origScript)
+                sys.stdout.write(jobid + "\n")
+            self.writeLogEntry(origScript)
+
+            return
             if self.decorate:
                 self.decorateScript(origScript, decScript)
                 toRun = decScript
             else:
                 toRun = origScript
-            self.readOptions()
-            cmdline = self.makeCmdline(toRun)
-            sys.stderr.write("Executing: " + cmdline + "\n")
             if not self.dry:
                 #os.system(cmdline)
                 jobid = subprocess.check_output(cmdline, shell=True).rstrip("\n")
@@ -328,8 +339,7 @@ Configuration:
                     else:
                         arg1 = ""
                     self.doCollect(jobid, toRun, arg1)
-                sys.stdout.write(jobid + "\n")
-            self.writeLogEntry(toRun)
+
             if self.decorate and not self.debug:
                 os.remove(decScript)
 
@@ -450,6 +460,6 @@ if __name__ == "__main__":
                 try:
                     S.main()
                 except Exception as e:
-                    sys.stderr.write("Error: {}".format(e))
+                    sys.stderr.write("Error: {}\n".format(e))
     else:
         sys.stderr.write("Error: mode should be one of {}.\n".format(", ".join(DEFAULTS.keys())))
