@@ -8,9 +8,10 @@ import sys
 import glob
 import fcntl
 import getpass
-import subprocess
-from tempfile import mkstemp
+import subprocess as sp
 from datetime import datetime
+
+PYVER = sys.version_info.major
 
 class Submit():
     mode     = "slurm"         # Or "pbs"
@@ -262,47 +263,39 @@ Configuration:
 
         return names
 
-    def decorateScript(self, infile, outfile):
+    def decorateScript(self, infile, out):
         dirtag = DEFAULTS[self.mode]['directive']
         inHeader = True
-        with open(outfile, "w") as out:
-            with open(infile, "r") as inf:
-                for row in inf:
-                    if inHeader:
-                        srow = row.strip()
-                        if len(srow) == 0 or srow.startswith("#!") or srow.startswith(dirtag):
-                            pass
-                        else:
-                            inHeader = False
-                            out.write("\necho Commandline: " + " ".join(self.trueArgs) + "\n")
-                            out.write("echo Started: `date`\n\n")
-                    out.write(row)
-                out.write("_RETCODE=$?\n")
-                if self.doneFile:
-                    p = self.doneFile.find("@")
-                    if p >= 0:
-                        self.doneFile = self.doneFile[0:p] + DEFAULTS[self.mode]['jobid'] + self.doneFile[p+1:]
-                    #out.write("touch " + self.doneFile + "\n")
-                    out.write("echo $_RETCODE > {}\n".format(self.doneFile))
-                out.write("echo Terminated: `date`\nexit $_RETCODE\n")
+        with open(infile, "r") as inf:
+            for row in inf:
+                if inHeader:
+                    srow = row.strip()
+                    if len(srow) == 0 or srow.startswith("#!") or srow.startswith(dirtag):
+                        pass
+                    else:
+                        inHeader = False
+                        out.write("\necho Commandline: " + " ".join(self.trueArgs) + "\n")
+                        out.write("echo Started: `date`\n\n")
+                out.write(row)
+            out.write("_RETCODE=$?\n")
+            if self.doneFile:
+                p = self.doneFile.find("@")
+                if p >= 0:
+                    self.doneFile = self.doneFile[0:p] + DEFAULTS[self.mode]['jobid'] + self.doneFile[p+1:]
+                #out.write("touch " + self.doneFile + "\n")
+                out.write("echo $_RETCODE > {}\n".format(self.doneFile))
+            out.write("echo Terminated: `date`\nexit $_RETCODE\n")
 
     def resolveScriptName(self, scriptName):
-        if not os.path.isfile(scriptName):
-            scriptName = self.scriptLibrary + "/" + scriptName
-            if not os.path.isfile(scriptName):
-                sys.stderr.write("Error: script `{}' not found either in current directory or in script library!\n(Script library: {})\n".format(scriptName, self.scriptLibrary))
-                return (False, False)
-        if self.trueArgs:
-            #decName = self.trueArgs[0] + ".IN"
-            #print (scriptName, self.trueArgs[0])
-            scriptFile = os.path.split(self.trueArgs[0])[1]
-            decName = mkstemp(prefix=scriptFile + "_", dir=".")[1]
-        else:
-            decName = False
-        #print (scriptName, decName)
-        return (scriptName, decName)
+        if os.path.isfile(scriptName):
+            return scriptName
+        scriptName = self.scriptLibrary + "/" + scriptName
+        if os.path.isfile(scriptName):
+            return scriptName
+        sys.stderr.write("Error: script `{}' not found either in current directory or in script library!\n(Script library: {})\n".format(scriptName, self.scriptLibrary))
+        return False
 
-    def makeCmdline(self, name):
+    def makeCmdline(self):
         origName = self.trueArgs[0]
         filename = os.path.split(origName)[1]
         # print (name, origName, filename)
@@ -322,7 +315,7 @@ Configuration:
             cmdline += " " + self.foptions
         if self.coptions:
             cmdline += " " + " ".join(self.coptions)
-        return cmdline + " {} {}".format(name, " ".join(self.trueArgs[1:]))
+        return cmdline + " /dev/stdin " + " ".join(self.trueArgs[1:])
 
     def doCollect(self, jobid, name, arg1):
         cmdline = "scollect.py submit -db {} {} {} {}".format(self.dbFile, jobid, name, arg1)
@@ -331,31 +324,57 @@ Configuration:
         except:
             pass
 
+    def submitScript(self, cmdline, script):
+        if PYVER == 3:
+            proc = sp.Popen(cmdline, shell="True", stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE, encoding='utf8')
+        else:
+            proc = sp.Popen(cmdline, shell="True", stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE)
+        if self.decorate:
+            self.decorateScript(script, proc.stdin)
+        else:
+            with open(script, "r") as f:
+                proc.stdin.write(f.read())
+        proc.stdin.close()
+        result = proc.stdout.readline().rstrip("\r\n")
+        return result
+
     def main(self):
-        (origScript, decScript) = self.resolveScriptName(self.trueArgs[0])
+        origScript = self.resolveScriptName(self.trueArgs[0])
         if origScript:
-            if self.decorate:
-                self.decorateScript(origScript, decScript)
-                toRun = decScript
-            else:
-                toRun = origScript
             self.readOptions()
-            cmdline = self.makeCmdline(toRun)
+            cmdline = self.makeCmdline()
             if self.debug > 0:
                 sys.stderr.write("Executing: " + cmdline + "\n")
             if not self.dry:
-                #os.system(cmdline)
-                jobid = subprocess.check_output(cmdline, shell=True).rstrip("\n")
-                if self.useDB:
-                    if len(self.trueArgs) > 1:
-                        arg1 = self.trueArgs[1]
-                    else:
-                        arg1 = ""
-                    self.doCollect(jobid, toRun, arg1)
+                jobid = self.submitScript(cmdline, origScript)
                 sys.stdout.write(jobid + "\n")
-                self.writeLogEntry(toRun, jobid)
-            if self.decorate and self.debug < 2:
-                os.remove(decScript)
+            self.writeLogEntry(origScript, jobid)
+
+    # def main(self):
+    #     (origScript, decScript) = self.resolveScriptName(self.trueArgs[0])
+    #     if origScript:
+    #         if self.decorate:
+    #             self.decorateScript(origScript, decScript)
+    #             toRun = decScript
+    #         else:
+    #             toRun = origScript
+    #         self.readOptions()
+    #         cmdline = self.makeCmdline(toRun)
+    #         if self.debug > 0:
+    #             sys.stderr.write("Executing: " + cmdline + "\n")
+    #         if not self.dry:
+    #             #os.system(cmdline)
+    #             jobid = subprocess.check_output(cmdline, shell=True).rstrip("\n")
+    #             if self.useDB:
+    #                 if len(self.trueArgs) > 1:
+    #                     arg1 = self.trueArgs[1]
+    #                 else:
+    #                     arg1 = ""
+    #                 self.doCollect(jobid, toRun, arg1)
+    #             sys.stdout.write(jobid + "\n")
+    #             self.writeLogEntry(toRun, jobid)
+    #         if self.decorate and self.debug < 2:
+    #             os.remove(decScript)
 
     ### Additional commands
 
@@ -412,7 +431,7 @@ Configuration:
                     sys.stdout.write(" " + a)
 
     def lookupJobs(self, jobids):
-        subprocess.call("for j in {}; do grep -w $j {}; done".format(" ".join(jobids), self.logFile), shell=True)
+        sp.call("for j in {}; do grep -w $j {}; done".format(" ".join(jobids), self.logFile), shell=True)
 
 ### PBS support
 
