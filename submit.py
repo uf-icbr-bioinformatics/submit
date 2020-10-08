@@ -323,7 +323,7 @@ Configuration:
             pass
 
     def submitScript(self, cmdline, script):
-        proc = sp.Popen(cmdline, shell="True", stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE)
+        proc = sp.Popen(cmdline, shell="True", stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE, encoding='utf8')
         if self.decorate:
             self.decorateScript(script, proc.stdin)
         else:
