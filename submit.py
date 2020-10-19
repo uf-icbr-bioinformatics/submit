@@ -164,27 +164,24 @@ Configuration:
 """.format(**fargs))
 
     def parseArgs(self, args):
+        mode = "submit"
         after = False
-        next = ""
+        prev = ""
         valuedArgs = ['-v', '-vv', '-vvv', '-conf', '-after', '-done', '-n', '-p', '-q', '-t', '-o', '-lib', '-log', '-mode']
 
         if args == []:
             self.usage()
             return False
 
-        if args[0] == '-ls':
-            self.listScripts(args[1:])
-            return False
-
-        if args[0] == "-w":
-            self.lookupJobs(args[1:])
-            return False
-
         for a in args:
             if after:
                 self.trueArgs.append(a)
             else:
-                if a == "-n":
+                if a == "-ls":
+                    mode = "list"
+                elif a == "-w":
+                    mode = "lookup"
+                elif a == "-n":
                     self.decorate = False
                 elif a == "-x":
                     self.dry = True
@@ -195,44 +192,53 @@ Configuration:
                 elif a in ["-h", "--help"]:
                     self.usage()
                     return False
-                elif next == "-mode":
-                    next = ""   # -mode has already been processed
-                elif next in ['-v', '-vv', '-vvv']:
-                    self.viewScript(a, next)
+                elif prev == "-mode":
+                    prev = ""   # -mode has already been processed
+                elif prev in ['-v', '-vv', '-vvv']:
+                    self.viewScript(a, prev)
                     return False
-                elif next == "-conf":
+                elif prev == "-conf":
                     self.confFile = a
-                    next = ""
-                elif next == "-after":
+                    prev = ""
+                elif prev == "-after":
                     if a != "0":
                         self.afterArgs.append(a)
-                    next = ""
-                elif next == "-done":
+                    prev = ""
+                elif prev == "-done":
                     self.doneFile = a
-                    next = ""
-                elif next == "-p":
+                    prev = ""
+                elif prev == "-p":
                     self.comment = a
-                    next = ""
-                elif next == "-q":
+                    prev = ""
+                elif prev == "-q":
                     self.queue = a
-                    next = ""
-                elif next == "-t":
+                    prev = ""
+                elif prev == "-t":
                     self.array = a
-                    next = ""
-                elif next == "-o":
+                    prev = ""
+                elif prev == "-o":
                     self.coptions.append(a.replace(",", " "))
-                    next = ""
-                elif next == "-lib":
+                    prev = ""
+                elif prev == "-lib":
                     self.scriptLibrary = a
-                    next = ""
-                elif next == "-log":
+                    prev = ""
+                elif prev == "-log":
                     self.logFile = a
-                    next = ""
+                    prev = ""
                 elif a in valuedArgs:
-                    next = a 
+                    prev = a 
                 else:
                     self.trueArgs.append(a)
                     after = True
+
+        if mode == "list":
+            self.listScripts(self.trueArgs)
+            return False
+
+        if mode == "lookup":
+            self.lookupJobs(self.trueArgs)
+            return False
+
         if self.trueArgs:
             return True
         else:
@@ -301,7 +307,7 @@ Configuration:
         # print (name, origName, filename)
         cmdline = 'sbatch --parsable -D "`pwd`" -J ' + origName
         if self.array:
-            cmdline += " -o {}.o%A_%a -e {}.e%A_%a -a {}".format(name, name, self.array)
+            cmdline += " -o {}.o%A_%a -e {}.e%A_%a -a {}".format(filename, filename, self.array)
         else:
             cmdline += " -o {}.IN.o%j -e {}.IN.e%j".format(filename, filename)
         if self.comment:
@@ -345,10 +351,15 @@ Configuration:
             cmdline = self.makeCmdline()
             if self.debug > 0:
                 sys.stderr.write("Executing: " + cmdline + "\n")
+            if self.debug > 1:
+                self.decorateScript(origScript, sys.stderr)
+                self.dry = True
             if not self.dry:
+                if not os.access(".", os.X_OK | os.W_OK):
+                    sys.stderr.write("Warning: current directory is not writeable, log files for this job will not be created.\n")
                 jobid = self.submitScript(cmdline, origScript)
                 sys.stdout.write(jobid + "\n")
-            self.writeLogEntry(origScript, jobid)
+                self.writeLogEntry(origScript, jobid)
 
     # def main(self):
     #     (origScript, decScript) = self.resolveScriptName(self.trueArgs[0])
@@ -415,7 +426,7 @@ Configuration:
         return (desc, args)
 
     def viewScript(self, script, arg):
-        (orig, ignore) = self.resolveScriptName(script)
+        orig = self.resolveScriptName(script)
         if orig:
             mode = arg.count("v")
             if mode == 3:
@@ -505,6 +516,6 @@ if __name__ == "__main__":
                 try:
                     S.main()
                 except Exception as e:
-                    sys.stderr.write("Error: {}".format(e))
+                    sys.stderr.write("Error: {}\n".format(e))
     else:
         sys.stderr.write("Error: mode should be one of {}.\n".format(", ".join(DEFAULTS.keys())))
