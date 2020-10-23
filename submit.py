@@ -341,7 +341,9 @@ Configuration:
             with open(script, "r") as f:
                 proc.stdin.write(f.read())
         proc.stdin.close()
+        proc.wait()
         result = proc.stdout.readline().rstrip("\r\n")
+        error = proc.stderr.read()
         return result
 
     def main(self):
