@@ -13,6 +13,13 @@ from datetime import datetime
 
 PYVER = sys.version_info.major
 
+def countLines(filename):
+    n = 0
+    with open(filename, "r") as f:
+        for _ in f:
+            n += 1
+    return n
+
 class Submit():
     mode     = "slurm"         # Or "pbs"
     dry      = False
@@ -24,6 +31,7 @@ class Submit():
     queue    = None
     coptions = []            # From cmdline -o option
     foptions = None            # From confFile
+    fileArray = None           # from -T
 
     confFile  = ".sbatchrc"
     logFile   = os.path.dirname(__file__) + "/../lib/submit.log"
@@ -105,6 +113,11 @@ Submit options (should be BEFORE script name):
               | 0 to 15, with the constraint that at most 4 of them will run at
               | the same time.
 
+ -T arrfile   | Creates a job array with one job for each line in "arrfile". In the
+              | job script, the line can be accessed using the JOB_FILEARRAY_LINE
+              | variable. The % symbol can be used to limit the number of concurrent
+              | jobs, as in -a.
+
  -o options   | Pass `options' to the {sub} command-line. The options should be 
               | separated by commas, with no spaces between them. For example: 
               | "-o --mem=10G,--time=20:00:00".
@@ -167,7 +180,7 @@ Configuration:
         mode = "submit"
         after = False
         prev = ""
-        valuedArgs = ['-v', '-vv', '-vvv', '-conf', '-after', '-done', '-n', '-p', '-q', '-t', '-o', '-lib', '-log', '-mode']
+        valuedArgs = ['-v', '-vv', '-vvv', '-conf', '-after', '-done', '-n', '-p', '-q', '-t', '-T', '-o', '-lib', '-log', '-mode']
 
         if args == []:
             self.usage()
@@ -216,6 +229,9 @@ Configuration:
                 elif prev == "-t":
                     self.array = a
                     prev = ""
+                elif prev == "-T":
+                    self.fileArray = a
+                    prev = ""
                 elif prev == "-o":
                     self.coptions.append(a.replace(",", " "))
                     prev = ""
@@ -238,6 +254,20 @@ Configuration:
         if mode == "lookup":
             self.lookupJobs(self.trueArgs)
             return False
+
+        if self.fileArray:
+            parts = self.fileArray.split("%")
+            faname = parts[0]
+            if not os.path.isfile(faname):
+                sys.stderr.write("Error: file `{}' does not exist.\n".format(faname))
+                return False
+            njobs = countLines(faname)
+            self.array = "1-" + str(njobs)
+            if len(parts) > 1:
+                self.array += "%" + parts[1]
+            self.fileArray = faname
+            #sys.stderr.write(self.fileArray + "\n")
+            #sys.stderr.write(self.array + "\n")
 
         if self.trueArgs:
             return True
@@ -282,6 +312,8 @@ Configuration:
                         inHeader = False
                         out.write("\necho Commandline: " + " ".join(self.trueArgs) + "\n")
                         out.write("echo Started: `date`\n\n")
+                        if self.fileArray:
+                            out.write("""JOB_FILEARRAY_LINE=$(sed "${{SLURM_ARRAY_TASK_ID}}q;d" {})\n""".format(self.fileArray))
                 out.write(row)
             out.write("_RETCODE=$?\n")
             if self.doneFile:
@@ -344,6 +376,9 @@ Configuration:
         proc.wait()
         result = proc.stdout.readline().rstrip("\r\n")
         error = proc.stderr.read()
+        if error:
+            sys.stderr.write(error)
+            return 0
         return result
 
     def main(self):
@@ -360,8 +395,9 @@ Configuration:
                 if not os.access(".", os.X_OK | os.W_OK):
                     sys.stderr.write("Warning: current directory is not writeable, log files for this job will not be created.\n")
                 jobid = self.submitScript(cmdline, origScript)
-                sys.stdout.write(jobid + "\n")
-                self.writeLogEntry(origScript, jobid)
+                if jobid > 0:
+                    sys.stdout.write(jobid + "\n")
+                    self.writeLogEntry(origScript, jobid)
 
     # def main(self):
     #     (origScript, decScript) = self.resolveScriptName(self.trueArgs[0])
