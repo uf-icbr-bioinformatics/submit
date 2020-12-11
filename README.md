@@ -55,10 +55,7 @@ when it terminates, where NNN is its job id. Then simply count the number of fil
 ```bash
 $ while true; do
   N=$(ls test.*.done | wc -l)
-  if [ "$N" == "3" ];
-  then
-    break
-  fi
+  if [ "$N" == "3" ]; then break; fi
   sleep 60
 done
 ```
@@ -133,6 +130,13 @@ will not include the start and end times in the output file.
 
 The `-p` option allows you to associate a short comment to each submitted job. This is useful, for example, to 
 distinguish jobs with the same name submitted for different projects.
+
+The `-t` option is used to specify a job array. For example: "-t 0-15%4" will run an array of 16 jobs, numbered from
+0 to 15, with the constraint that at most 4 of them will run at the same time.
+
+The `-T` option specifies a job array based on the contents of a file. For example, if file "names.txt" contains 10
+lines, "-T names.txt%4" will execute an array of 10 jobs (with the constraint that only 4 will run at the same time).
+Within each job, the variable JOB_FILEARRAY_LINE will be set to the contents of one of the lines in the file.
 
 The `-log` option allows you to specify a log file where all submitted commands are recorded. This is useful to 
 compile statistics on how often each qsub script is used.
