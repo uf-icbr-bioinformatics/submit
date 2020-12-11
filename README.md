@@ -144,4 +144,17 @@ compile statistics on how often each qsub script is used.
 The `-x` option prints the sbatch or qsub command that would be executed, without actually executing it (useful 
 for checking syntax).
 
- 
+## Return codes
+
+The **submit.py** command returns one of the following return codes:
+
+Code | Meaning
+-----|--------
+0    | Success
+1 | Invalid mode specified (should be one of slurm or pbs)
+2 | Sbatch error (e.g., incorrect submission parameters)
+3 | File specified with -T does not exist
+4 | Missing script name
+5 | Script not found
+6 | Any other error
+

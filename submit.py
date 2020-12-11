@@ -13,6 +13,14 @@ from datetime import datetime
 
 PYVER = sys.version_info.major
 
+# Error codes:
+# 1 - invalid mode specified
+# 2 - sbatch error (wrong submission params)
+# 3 - file specified with -T does not exist
+# 4 - bad syntax (missing script name, etc)
+# 5 - script not found
+# 6 - any other error
+
 def countLines(filename):
     n = 0
     with open(filename, "r") as f:
@@ -260,7 +268,7 @@ Configuration:
             faname = parts[0]
             if not os.path.isfile(faname):
                 sys.stderr.write("Error: file `{}' does not exist.\n".format(faname))
-                return False
+                sys.exit(3)
             njobs = countLines(faname)
             self.array = "1-" + str(njobs)
             if len(parts) > 1:
@@ -273,7 +281,7 @@ Configuration:
             return True
         else:
             sys.stderr.write("Error: missing script name. Use -h for help.\n")
-            return False
+            sys.exit(4)
 
     def readOptions(self):
         optpath = os.path.expanduser("~/" + self.confFile)
@@ -331,7 +339,7 @@ Configuration:
         if os.path.isfile(scriptName):
             return scriptName
         sys.stderr.write("Error: script `{}' not found either in current directory or in script library!\n(Script library: {})\n".format(scriptName, self.scriptLibrary))
-        return False
+        sys.exit(5)
 
     def makeCmdline(self):
         origName = self.trueArgs[0]
@@ -378,6 +386,7 @@ Configuration:
         error = proc.stderr.read()
         if error:
             sys.stderr.write(error)
+            sys.exit(2)
             return 0
         return result
 
@@ -555,5 +564,7 @@ if __name__ == "__main__":
                     S.main()
                 except Exception as e:
                     sys.stderr.write("Error: {}\n".format(e))
+                    sys.exit(6)
     else:
         sys.stderr.write("Error: mode should be one of {}.\n".format(", ".join(DEFAULTS.keys())))
+        sys.exit(1)
