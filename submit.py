@@ -40,6 +40,7 @@ class Submit():
     coptions = []            # From cmdline -o option
     foptions = None            # From confFile
     fileArray = None           # from -T
+    arrayArgs = False          # Set by -A
 
     confFile  = ".sbatchrc"
     logFile   = os.path.dirname(__file__) + "/../lib/submit.log"
@@ -60,11 +61,13 @@ class Submit():
     def writeLogEntry(self, script, jobid):
         """Write a log entry to the logFile to record that `script' was called. Uses locking."""
         now = datetime.now()
+        scriptname = os.path.split(script)[1]
+        cwd = os.getcwd()
         try:
             with open(self.logFile, "a") as f:
                 fcntl.flock(f,fcntl.LOCK_EX)
                 try:
-                    f.write(now.isoformat('\t') + '\t' + jobid + "\t" + getpass.getuser() + '\t' + script + '\n')
+                    f.write(now.isoformat('\t') + '\t' + str(jobid) + "\t" + getpass.getuser() + '\t' + scriptname + "\t" + cwd + '\n')
                 finally:
                     fcntl.flock(f,fcntl.LOCK_UN)
         except:
@@ -125,6 +128,12 @@ Submit options (should be BEFORE script name):
               | job script, the line can be accessed using the JOB_FILEARRAY_LINE
               | variable. The % symbol can be used to limit the number of concurrent
               | jobs, as in -a.
+
+ -A arrfile   | Like -T, but arrfile can be a tab-delimited file, and its contents
+              | are stored in the JOB_FILEARRAY_ARGS array. For example, the contents
+              | of the second column are accessed as ${{JOB_FILEARRAY_ARGS[1]}}.
+
+ -W           | Cause submit to wait until the job is done before returning.
 
  -o options   | Pass `options' to the {sub} command-line. The options should be 
               | separated by commas, with no spaces between them. For example: 
@@ -188,7 +197,7 @@ Configuration:
         mode = "submit"
         after = False
         prev = ""
-        valuedArgs = ['-v', '-vv', '-vvv', '-conf', '-after', '-done', '-n', '-p', '-q', '-t', '-T', '-o', '-lib', '-log', '-mode']
+        valuedArgs = ['-v', '-vv', '-vvv', '-conf', '-after', '-done', '-n', '-p', '-q', '-t', '-T', '-A', '-o', '-lib', '-log', '-mode']
 
         if args == []:
             self.usage()
@@ -240,6 +249,10 @@ Configuration:
                 elif prev == "-T":
                     self.fileArray = a
                     prev = ""
+                elif prev == "-A":
+                    self.fileArray = a
+                    self.arrayArgs = True
+                    prev = ""
                 elif prev == "-o":
                     self.coptions.append(a.replace(",", " "))
                     prev = ""
@@ -251,6 +264,8 @@ Configuration:
                     prev = ""
                 elif a in valuedArgs:
                     prev = a 
+                elif a == "-W":
+                    self.coptions.append("-W")
                 else:
                     self.trueArgs.append(a)
                     after = True
@@ -318,10 +333,14 @@ Configuration:
                         pass
                     else:
                         inHeader = False
-                        out.write("\necho Commandline: " + " ".join(self.trueArgs) + "\n")
-                        out.write("echo Started: `date`\n\n")
+                        out.write("\necho %Commandline: " + " ".join(self.trueArgs) + "\n")
+                        out.write("echo %Started: `date`\n")
+                        out.write("SUBMIT_TS=$(date +%s)\n\n")
                         if self.fileArray:
-                            out.write("""JOB_FILEARRAY_LINE=$(sed "${{SLURM_ARRAY_TASK_ID}}q;d" {})\n""".format(self.fileArray))
+                            if self.arrayArgs:
+                                out.write("""JOB_FILEARRAY_ARGS=($(sed "${{SLURM_ARRAY_TASK_ID}}q;d" {}))\n""".format(self.fileArray))
+                            else:
+                                out.write("""JOB_FILEARRAY_LINE=$(sed "${{SLURM_ARRAY_TASK_ID}}q;d" {})\n""".format(self.fileArray))
                 out.write(row)
             out.write("_RETCODE=$?\n")
             if self.doneFile:
@@ -330,7 +349,10 @@ Configuration:
                     self.doneFile = self.doneFile[0:p] + DEFAULTS[self.mode]['jobid'] + self.doneFile[p+1:]
                 #out.write("touch " + self.doneFile + "\n")
                 out.write("echo $_RETCODE > {}\n".format(self.doneFile))
-            out.write("echo Terminated: `date`\nexit $_RETCODE\n")
+            out.write("echo %Terminated: `date`\n")
+            out.write("SUBMIT_TS2=$(date +%s)\n")
+            out.write("echo %Elapsed: $(($SUBMIT_TS2 - $SUBMIT_TS)) seconds\n")
+            out.write("exit $_RETCODE\n")
 
     def resolveScriptName(self, scriptName):
         if os.path.isfile(scriptName):
@@ -344,12 +366,13 @@ Configuration:
     def makeCmdline(self):
         origName = self.trueArgs[0]
         filename = os.path.split(origName)[1]
+        logdir = "log/" if os.path.isdir("log") else ""
         # print (name, origName, filename)
         cmdline = 'sbatch --parsable -D "`pwd`" -J ' + origName
         if self.array:
-            cmdline += " -o {}.o%A_%a -e {}.e%A_%a -a {}".format(filename, filename, self.array)
+            cmdline += " -o {}{}.o%A_%a -e {}{}.e%A_%a -a {}".format(logdir, filename, logdir, filename, self.array)
         else:
-            cmdline += " -o {}.IN.o%j -e {}.IN.e%j".format(filename, filename)
+            cmdline += " -o {}{}.IN.o%j -e {}{}.IN.e%j".format(logdir, filename, logdir, filename)
         if self.comment:
             cmdline += ' --comment "{}"'.format(self.comment)
         if self.afterArgs:
@@ -361,6 +384,11 @@ Configuration:
             cmdline += " " + self.foptions
         if self.coptions:
             cmdline += " " + " ".join(self.coptions)
+
+        for i in range(len(self.trueArgs)):
+            if " " in self.trueArgs[i]:
+                self.trueArgs[i] = '"' + self.trueArgs[i] + '"'
+
         return cmdline + " /dev/stdin " + " ".join(self.trueArgs[1:])
 
     def doCollect(self, jobid, name, arg1):
@@ -388,13 +416,14 @@ Configuration:
             sys.stderr.write(error)
             sys.exit(2)
             return 0
-        return result
+        return int(result)
 
     def main(self):
         origScript = self.resolveScriptName(self.trueArgs[0])
         if origScript:
             self.readOptions()
             cmdline = self.makeCmdline()
+
             if self.debug > 0:
                 sys.stderr.write("Executing: " + cmdline + "\n")
             if self.debug > 1:
@@ -405,7 +434,7 @@ Configuration:
                     sys.stderr.write("Warning: current directory is not writeable, log files for this job will not be created.\n")
                 jobid = self.submitScript(cmdline, origScript)
                 if jobid > 0:
-                    sys.stdout.write(jobid + "\n")
+                    sys.stdout.write(str(jobid) + "\n")
                     self.writeLogEntry(origScript, jobid)
 
     # def main(self):
