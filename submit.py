@@ -170,7 +170,7 @@ Submit options (should be BEFORE script name):
               | value to the SUBMIT_MODE environment variable. The command-line
               | option takes precedence over the environment variable.
 
- -lib libdir  | Use `libdir' as the scripts library. Default: "../lib/scripts"
+ -lib libdirs | Use `libdirs' as the search path for scripts. Default: "../lib/scripts"
               | (relative to location of this command). This can also be set
               | by assigning a value to the SUBMIT_LIB environment variable. The
               | command-line option takes precedence over the environment variable.
@@ -211,10 +211,10 @@ argument for a subsequent job. For example:
 Configuration:
 
   SUBMIT_MODE - environment variable containing submit mode (slurm or pbs)
-  SUBMIT_LIB - directory containing qsub scripts
+  SUBMIT_LIB - search path for qsub scripts (colon-separated list of directories)
   {conf} - file in home directory containing default submit options
 
-(c) 2014-2017, Alberto Riva, DiBiG, ICBR Bioinformatics Core, University of Florida.
+(c) 2014-2023, Alberto Riva, DiBiG, ICBR Bioinformatics Core, University of Florida.
 """.format(**fargs))
 
     def parseArgs(self, args):
