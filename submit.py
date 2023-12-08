@@ -10,6 +10,7 @@ import fcntl
 import getpass
 import subprocess as sp
 from datetime import datetime
+from smtplib import SMTP
 
 PYVER = sys.version_info.major
 
@@ -21,12 +22,23 @@ PYVER = sys.version_info.major
 # 5 - script not found
 # 6 - any other error
 
+# Utils
+
 def countLines(filename):
     n = 0
     with open(filename, "r") as f:
         for _ in f:
             n += 1
     return n
+
+def parseDirList(dl):
+    dirs = []
+    for d in dl.split(":"):
+        if os.path.isdir(d):
+            dirs.append(d)
+    return dirs
+
+# Main class
 
 class Submit():
     mode     = "slurm"         # Or "pbs"
@@ -41,18 +53,26 @@ class Submit():
     foptions = None            # From confFile
     fileArray = None           # from -T
     arrayArgs = False          # Set by -A
-
+    sendEmail = False          # Set by -m
+    emailAlways = False        # If True, send email also for successful jobs (set by -M)
+    logdir = False             # Directory where .IN.o and .IN.e files are written
+    
     confFile  = ".sbatchrc"
     logFile   = os.path.dirname(__file__) + "/../lib/submit.log"
     dbFile    = os.path.dirname(__file__) + "/../lib/sdb/submit.db"
     useDB     = True
     trueArgs  = []
     afterArgs = []
-
+    scriptLibrary = []
+    
     def __init__(self, mode):
         self.mode = mode
         self.confFile = DEFAULTS[mode]['conf']
-        self.scriptLibrary = os.getenv("SUBMIT_LIB") or os.path.dirname(__file__) + "/../lib/scripts/"
+        submitlib = os.getenv("SUBMIT_LIB")
+        if submitlib:
+            self.scriptLibrary = parseDirList(submitlib)
+        else:
+            self.scriptLibrary = [os.path.dirname(__file__) + "/../lib/scripts/"]
 
     def dump(self):
         for a in ['mode', 'dry', 'decorate', 'doneFile', 'array', 'comment', 'queue', 'coptions', 'foptions', 'confFile', 'scriptLibrary', 'logFile', 'afterArgs', 'trueArgs']:
@@ -158,6 +178,10 @@ Submit options (should be BEFORE script name):
  -log logfile | Record job submissions to `logfile'. Degault: "../lib/submit.log"
               | (relative to location of this command).
 
+ -l directory | Directory where the stdout and stderr files are written. Defaults
+              | to a subdirectory called 'log' of the current directory, if it
+              | exists, or the current directory.
+
 Other options:
 
  -w jobids...  | Extract log file entry for each of the specified job ids.
@@ -197,7 +221,7 @@ Configuration:
         mode = "submit"
         after = False
         prev = ""
-        valuedArgs = ['-v', '-vv', '-vvv', '-conf', '-after', '-done', '-n', '-p', '-q', '-t', '-T', '-A', '-o', '-lib', '-log', '-mode']
+        valuedArgs = ['-v', '-vv', '-vvv', '-conf', '-after', '-done', '-n', '-p', '-q', '-t', '-T', '-A', '-o', '-lib', '-log', '-mode', '-m', '-M', '-l']
 
         if args == []:
             self.usage()
@@ -211,6 +235,8 @@ Configuration:
                     mode = "list"
                 elif a == "-w":
                     mode = "lookup"
+                elif a == "-em":
+                    mode = "email"
                 elif a == "-n":
                     self.decorate = False
                 elif a == "-x":
@@ -257,10 +283,20 @@ Configuration:
                     self.coptions.append(a.replace(",", " "))
                     prev = ""
                 elif prev == "-lib":
-                    self.scriptLibrary = a
+                    self.scriptLibrary = parseDirList(a)
                     prev = ""
                 elif prev == "-log":
                     self.logFile = a
+                    prev = ""
+                elif prev == "-m":
+                    self.sendEmail = a
+                    prev = ""
+                elif prev == "-M":
+                    self.sendEmail = a
+                    self.emailAlways = True
+                    prev = ""
+                elif prev == '-l':
+                    self.logdir = a
                     prev = ""
                 elif a in valuedArgs:
                     prev = a 
@@ -276,6 +312,10 @@ Configuration:
 
         if mode == "lookup":
             self.lookupJobs(self.trueArgs)
+            return False
+
+        if mode == "email":
+            self.sendNotification(self.trueArgs)
             return False
 
         if self.fileArray:
@@ -335,7 +375,8 @@ Configuration:
                         inHeader = False
                         out.write("\necho %Commandline: " + " ".join(self.trueArgs) + "\n")
                         out.write("echo %Started: `date`\n")
-                        out.write("SUBMIT_TS=$(date +%s)\n\n")
+                        out.write("_ORIG_PWD=$PWD\n")
+                        out.write("_SUBMIT_TS=$(date +%s)\n\n")
                         if self.fileArray:
                             if self.arrayArgs:
                                 out.write("""JOB_FILEARRAY_ARGS=($(sed "${{SLURM_ARRAY_TASK_ID}}q;d" {}))\n""".format(self.fileArray))
@@ -350,23 +391,32 @@ Configuration:
                 #out.write("touch " + self.doneFile + "\n")
                 out.write("echo $_RETCODE > {}\n".format(self.doneFile))
             out.write("echo %Terminated: `date`\n")
-            out.write("SUBMIT_TS2=$(date +%s)\n")
-            out.write("echo %Elapsed: $(($SUBMIT_TS2 - $SUBMIT_TS)) seconds\n")
+            out.write("_SUBMIT_TS2=$(date +%s)\n")
+            out.write("echo %Elapsed: $(($_SUBMIT_TS2 - $_SUBMIT_TS)) seconds\n")
+            if self.sendEmail:
+                if self.emailAlways:
+                    out.write("""{}/submit -em {} $SLURM_JOB_ID $_RETCODE $(($_SUBMIT_TS2 - $_SUBMIT_TS)) $_ORIG_PWD "{}"\n""".format(os.path.dirname(__file__), self.sendEmail, " ".join(self.trueArgs)))
+                else:
+                    out.write("""if [[ "$_RETCODE" != "0" ]]; then {}/submit -em {} $SLURM_JOB_ID $_RETCODE $(($_SUBMIT_TS2 - $_SUBMIT_TS)) $ORIG_PWD "{}"; fi\n""".format(os.path.dirname(__file__), self.sendEmail, " ".join(self.trueArgs)))
             out.write("exit $_RETCODE\n")
 
     def resolveScriptName(self, scriptName):
         if os.path.isfile(scriptName):
             return scriptName
-        scriptName = self.scriptLibrary + "/" + scriptName
-        if os.path.isfile(scriptName):
-            return scriptName
+        for dl in self.scriptLibrary:
+            scriptPath = dl + "/" + scriptName
+            if os.path.isfile(scriptPath):
+                return scriptPath
         sys.stderr.write("Error: script `{}' not found either in current directory or in script library!\n(Script library: {})\n".format(scriptName, self.scriptLibrary))
         sys.exit(5)
 
     def makeCmdline(self):
         origName = self.trueArgs[0]
         filename = os.path.split(origName)[1]
-        logdir = "log/" if os.path.isdir("log") else ""
+        if self.logdir:
+            logdir = self.logdir + "/"
+        else:
+            logdir = "log/" if os.path.isdir("log") else ""
         # print (name, origName, filename)
         cmdline = 'sbatch --parsable -D "`pwd`" -J ' + origName
         if self.array:
@@ -519,6 +569,31 @@ Configuration:
 
     def lookupJobs(self, jobids):
         sp.call("for j in {}; do grep -w $j {}; done".format(" ".join(jobids), self.logFile), shell=True)
+
+    def sendNotification(self, args):
+        email, jobid, retcode, seconds, pwd, cmdline = args
+        S = SMTP("smtp.ufl.edu")
+        succ = "success" if retcode == "0" else "failed"
+        body = f"""Subject: Job {jobid}: {succ}
+From: {email}
+To: {email}
+Content-type: text/html
+
+<!DOCTYPE html>
+<HTML>
+<BODY>
+<PRE>
+<B>Job ID:</B>      {jobid}
+<B>Retcode:</B>     {retcode}
+<B>Seconds:</B>     {seconds}
+<B>Directory:</B>   {pwd}
+<B>Commandline:</B> {cmdline}
+</PRE>
+</BODY>
+</HTML>
+
+"""
+        S.sendmail(email, email, body)
 
 ### PBS support
 
