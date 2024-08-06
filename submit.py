@@ -5,6 +5,7 @@
 
 import os, os.path
 import sys
+import csv
 import glob
 import fcntl
 import getpass
@@ -53,6 +54,7 @@ class Submit():
     foptions = None            # From confFile
     fileArray = None           # from -T
     arrayArgs = False          # Set by -A
+    argsFromFile = False       # Set by -F
     sendEmail = False          # Set by -m
     emailAlways = False        # If True, send email also for successful jobs (set by -M)
     logdir = False             # Directory where .IN.o and .IN.e files are written
@@ -153,6 +155,14 @@ Submit options (should be BEFORE script name):
               | are stored in the JOB_FILEARRAY_ARGS array. For example, the contents
               | of the second column are accessed as ${{JOB_FILEARRAY_ARGS[1]}}.
 
+ -F argfile   | Read script arguments from tab delimited file `argfile', submitting
+              | one job for each row. If other arguments are submitted on the command
+              | line, they will be appended after the ones read from the file. For
+              | example, if `argfile' contains two columns and the command is:
+              |   submit -F argfile script.qsub a b c
+              | the script will be invoked with five arguments, two read from argfile
+              | and the remaining three fixed.
+
  -W           | Cause submit to wait until the job is done before returning.
 
  -o options   | Pass `options' to the {sub} command-line. The options should be 
@@ -161,7 +171,7 @@ Submit options (should be BEFORE script name):
 
  -n           | Submit will NOT modify the script (by default, submit will add 
               | messages printing start and stop times for the script). This 
-              | option is incompatible with "-done" and "-n".
+              | option is incompatible with "-done".
 
  -x           | Only print submission command, do not execute it.
 
@@ -175,7 +185,7 @@ Submit options (should be BEFORE script name):
               | by assigning a value to the SUBMIT_LIB environment variable. The
               | command-line option takes precedence over the environment variable.
 
- -log logfile | Record job submissions to `logfile'. Degault: "../lib/submit.log"
+ -log logfile | Record job submissions to `logfile'. Default: "../lib/submit.log"
               | (relative to location of this command).
 
  -l directory | Directory where the stdout and stderr files are written. Defaults
@@ -221,7 +231,7 @@ Configuration:
         mode = "submit"
         after = False
         prev = ""
-        valuedArgs = ['-v', '-vv', '-vvv', '-conf', '-after', '-done', '-n', '-p', '-q', '-t', '-T', '-A', '-o', '-lib', '-log', '-mode', '-m', '-M', '-l']
+        valuedArgs = ['-v', '-vv', '-vvv', '-conf', '-after', '-done', '-n', '-p', '-q', '-t', '-T', '-A', '-F', '-o', '-lib', '-log', '-mode', '-m', '-M', '-l']
 
         if args == []:
             self.usage()
@@ -279,6 +289,9 @@ Configuration:
                     self.fileArray = a
                     self.arrayArgs = True
                     prev = ""
+                elif prev == "-F":
+                    self.argsFromFile = a
+                    prev = ""
                 elif prev == "-o":
                     self.coptions.append(a.replace(",", " "))
                     prev = ""
@@ -318,6 +331,10 @@ Configuration:
             self.sendNotification(self.trueArgs)
             return False
 
+        if self.argsFromFile and not os.path.isfile(self.argsFromFile):
+            sys.stderr.write("Error: file `{}' does not exist.\n".format(self.argsFromFile))
+            sys.exit(3)
+        
         if self.fileArray:
             parts = self.fileArray.split("%")
             faname = parts[0]
@@ -439,7 +456,8 @@ Configuration:
             if " " in self.trueArgs[i]:
                 self.trueArgs[i] = '"' + self.trueArgs[i] + '"'
 
-        return cmdline + " /dev/stdin " + " ".join(self.trueArgs[1:])
+        #return cmdline + " /dev/stdin " + fileargs + " " + " ".join(self.trueArgs[1:])
+        return cmdline + " /dev/stdin ",  " ".join(self.trueArgs[1:])
 
     def doCollect(self, jobid, name, arg1):
         cmdline = "scollect.py submit -db {} {} {} {}".format(self.dbFile, jobid, name, arg1)
@@ -472,20 +490,29 @@ Configuration:
         origScript = self.resolveScriptName(self.trueArgs[0])
         if origScript:
             self.readOptions()
-            cmdline = self.makeCmdline()
+            cmdline1, cmdline2 = self.makeCmdline()
+            if self.argsFromFile:
+                with open(self.argsFromFile, "r") as f:
+                    c = csv.reader(f, delimiter='\t')
+                    for row in c:
+                        fargs = " ".join(row)
+                        self.do_submit(cmdline1 + fargs + " " + cmdline2, origScript)
+            else:
+                self.do_submit(cmdline1 + cmdline2, origScript)
 
-            if self.debug > 0:
-                sys.stderr.write("Executing: " + cmdline + "\n")
-            if self.debug > 1:
-                self.decorateScript(origScript, sys.stderr)
-                self.dry = True
-            if not self.dry:
-                if not os.access(".", os.X_OK | os.W_OK):
-                    sys.stderr.write("Warning: current directory is not writeable, log files for this job will not be created.\n")
-                jobid = self.submitScript(cmdline, origScript)
-                if jobid > 0:
-                    sys.stdout.write(str(jobid) + "\n")
-                    self.writeLogEntry(origScript, jobid)
+    def do_submit(self, cmdline, origScript):
+        if self.debug > 0:
+            sys.stderr.write("Executing: " + cmdline + "\n")
+        if self.debug > 1:
+            self.decorateScript(origScript, sys.stderr)
+            self.dry = True
+        if not self.dry:
+            if not os.access(".", os.X_OK | os.W_OK):
+                sys.stderr.write("Warning: current directory is not writeable, log files for this job will not be created.\n")
+            jobid = self.submitScript(cmdline, origScript)
+            if jobid > 0:
+                sys.stdout.write(str(jobid) + "\n")
+                self.writeLogEntry(origScript, jobid)
 
     # def main(self):
     #     (origScript, decScript) = self.resolveScriptName(self.trueArgs[0])
@@ -516,14 +543,16 @@ Configuration:
     ### Additional commands
 
     def listScripts(self, patterns=[]):
-        files = glob.glob("{}/*.qsub".format(self.scriptLibrary))
-        files = [ os.path.split(f)[1] for f in files ]
-        files.sort()
-        sys.stdout.write("Scripts in {}:\n".format(self.scriptLibrary))
-        for f in files:
-            if self.matches(f, patterns):
-                sys.stdout.write("  " + f + "\n")
-        sys.stdout.write("\n")
+        for lib in self.scriptLibrary:
+            files = glob.glob("{}/*.qsub".format(lib))
+            if files:
+                files = [ os.path.split(f)[1] for f in files ]
+                files.sort()
+                sys.stdout.write("Scripts in {}:\n".format(lib))
+                for f in files:
+                    if self.matches(f, patterns):
+                        sys.stdout.write("  " + f + "\n")
+                sys.stdout.write("\n")
 
     def matches(self, name, patterns):
         if not patterns:
