@@ -151,6 +151,10 @@ The `-T` option specifies a job array based on the contents of a file. For examp
 lines, "-T names.txt%4" will execute an array of 10 jobs (with the constraint that only 4 will run at the same time).
 Within each job, the variable JOB_FILEARRAY_LINE will be set to the contents of one of the lines in the file.
 
+The `-A` option specifies a job array based on the contents of a tab-delimited file. It will submit one job for
+each line in the file, and within each job the contents of the line will be stored in the JOB_FILEARRAY_ARGS array.
+For example, the contents of the second column are accessed as ${JOB_FILEARRAY_ARGS[1]}.
+
 The `-log` option allows you to specify a log file where all submitted commands are recorded. This is useful to 
 compile statistics on how often each qsub script is used.
 
