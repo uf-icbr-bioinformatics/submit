@@ -45,7 +45,7 @@ script, and we want to pause until all three jobs are complete. This is accompli
 
 ```bash
 $ for f in file1 file2 file3; do
-  submit.p -done test.@.done test.qsub $f
+  submit.py -done test.@.done test.qsub $f
 done
 ```
 
@@ -60,6 +60,19 @@ $ while true; do
 done
 ```
 
+Alternatively, you can use the -W option, which will cause the submit command to wait until the submitted
+job is done, in combination with & and wait:
+
+```bash
+$ for f in file1 file2 file3; do
+  submit.py -W test.@.done test.qsub $f &
+done
+wait
+```
+
+The advantage of this method is that it doesn't require a separate script for waiting; the disadvanage is that
+it may create a large number of background processes when submitting many jobs at the same time.
+
 You can also schedule a job to be executed after a previous one terminates. This is done using the `-after` 
 command-line option in the second job, followed by the id of the first one. You can take advantage of the 
 fact that submit prints the job id of the submitted job when done. So, to schedule job2.qsub to run after 
@@ -73,7 +86,7 @@ $ submit.py -after $JOB1 job2.qsub
 ## Configuration file
 
 You can save commonly-used command-line options to a configuration file, by default `.sbatchrc` in your home 
-directory (this can be changed with the `-conf` command-line option. The configuration file should contain 
+directory (this can be changed with the `-conf` command-line option). The configuration file should contain 
 `option=value` entries as you would write them on the sbatch or qsub command-line. For example, if you always 
 submit your jobs to the acct1 account and you would like to receive a notification email when a job fails, 
 you can put the following in your `.sbatchrc` file:
